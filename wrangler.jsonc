@@ -24,7 +24,7 @@
 		{
 			"binding": "DB",
 			"database_name": "tixtile",
-			"database_id": "d1896fb1-a7bf-4603-b567-73201705e48b"
+			"database_id": "text"
 		}
 	],
 	"observability": {
