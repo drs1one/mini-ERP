@@ -53,7 +53,7 @@ function getRecordHours(r: MonthlyRecord): number {
     return Number((b1 + b2 + b3).toFixed(2));
 }
 
-export default function MonthlyAttendanceReport({ employees }: { employees: Employee[] }) {
+export default function MonthlyAttendanceReport({ employees = [] }: { employees?: Employee[] }) {
     const currentDate = new Date();
     const [selectedYear, setSelectedYear] = useState<number>(currentDate.getFullYear());
     const [selectedMonth, setSelectedMonth] = useState<string>(String(currentDate.getMonth() + 1).padStart(2, '0'));
@@ -78,7 +78,7 @@ export default function MonthlyAttendanceReport({ employees }: { employees: Empl
     };
 
     useEffect(() => {
-        fetchMonthData();
+        void fetchMonthData();
     }, [selectedYear, selectedMonth]);
 
     // Aggregate hours and days present per employee
@@ -139,7 +139,7 @@ export default function MonthlyAttendanceReport({ employees }: { employees: Empl
                     </select>
 
                     <button
-                        onClick={() => { fetchMonthData(); }}
+                        onClick={() => void fetchMonthData()}
                         className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow transition-colors"
                     >
                         Refresh

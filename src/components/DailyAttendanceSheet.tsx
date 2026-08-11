@@ -50,7 +50,6 @@ interface Props {
     onSave: () => void;
 }
 
-// Day mapping dictionary to match English, French, and abbreviations
 const dayMapping: Record<string, string[]> = {
     sunday: ['sunday', 'dimanche', 'sun', 'dim', '0'],
     monday: ['monday', 'lundi', 'mon', 'lun', '1'],
@@ -75,7 +74,6 @@ const matchDay = (templateDay: string, targetDay: string) => {
     return false;
 };
 
-// Exact time calculation logic matching TemplatePlanner
 const parseTimeToMinutes = (timeStr: string) => {
     if (!timeStr) return 0;
     let clean = String(timeStr).trim();
@@ -101,7 +99,6 @@ const getMinutesBetween = (start: string, end: string) => {
     return totalMins > 0 ? totalMins : 0;
 };
 
-// Helper to convert time format for <input type="time"> (24h format)
 const convertTo24Hour = (timeStr: string) => {
     if (!timeStr) return '';
     let cleanStr = String(timeStr).trim();
@@ -123,7 +120,6 @@ const convertTo24Hour = (timeStr: string) => {
     return cleanStr.substring(0, 5);
 };
 
-// Helper to retrieve template values across different possible database column names
 const getVal = (tmpl: TemplateRule | undefined, keys: string[]) => {
     if (!tmpl) return '';
     for (const k of keys) {
@@ -152,7 +148,7 @@ export default function DailyAttendanceSheet({
         async function fetchTemplates() {
             try {
                 const res = await fetch('/api/schedule/template');
-                const text = await res.text(); // Read raw text to prevent JSON parse crashes
+                const text = await res.text();
                 if (!isMounted || !text) return;
 
                 const data = JSON.parse(text);
@@ -174,27 +170,27 @@ export default function DailyAttendanceSheet({
         };
     }, []);
 
-    // Find template rule matching selectedDay across multiple naming conventions
     const currentTemplate = templates.find(r =>
         matchDay(r.day_of_week || r.day || r.name || '', selectedDay)
     );
 
-    // Filter employees based on search query
-    const filteredEmployees = employees.filter(emp =>
-        emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        emp.matricule.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    // Exact match for matricule, partial match for name
+    const filteredEmployees = employees.filter(emp => {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+        const matchMatricule = emp.matricule.toLowerCase() === query;
+        const matchName = emp.name.toLowerCase().includes(query);
+        return matchMatricule || matchName;
+    });
 
     return (
         <div className="bg-white p-6 rounded-xl shadow-md mb-8">
-            {/* Header section */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                 <div>
                     <h2 className="text-xl font-bold text-gray-700">Daily Attendance Sheet ({selectedDay})</h2>
-                    <p className="text-xs text-gray-500 mt-1">Schedule loaded automatically from database templates. Adjust times, presence, and declaration status.</p>
+                    <p className="text-xs text-gray-500 mt-1">Schedule loaded automatically from database templates. Employees start unchecked by default.</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                    {/* Search Input */}
                     <div>
                         <input
                             type="text"
@@ -222,7 +218,6 @@ export default function DailyAttendanceSheet({
                 </div>
             </div>
 
-            {/* Table section */}
             {loading ? (
                 <p className="text-gray-500 py-8 text-center font-medium">Loading...</p>
             ) : employees.length === 0 ? (
@@ -260,7 +255,7 @@ export default function DailyAttendanceSheet({
 
                                 const rec = {
                                     employee_id: emp.id,
-                                    is_present: hasExisting && existingRec?.is_present !== undefined ? existingRec.is_present : (currentTemplate?.is_working_day !== 0),
+                                    is_present: hasExisting && existingRec?.is_present !== undefined ? existingRec.is_present : false,
                                     declaration_status: hasExisting && existingRec?.declaration_status !== undefined ? existingRec.declaration_status : 'declared',
                                     block1_in: hasExisting && existingRec?.block1_in !== undefined ? convertTo24Hour(existingRec.block1_in) : getVal(currentTemplate, ['block1_in', 'matin_entree', 'arrivee']),
                                     block1_out: hasExisting && existingRec?.block1_out !== undefined ? convertTo24Hour(existingRec.block1_out) : getVal(currentTemplate, ['block1_out', 'matin_sortie', 'pause1_sortie']),
@@ -270,7 +265,6 @@ export default function DailyAttendanceSheet({
                                     block3_out: hasExisting && existingRec?.block3_out !== undefined ? convertTo24Hour(existingRec.block3_out) : getVal(currentTemplate, ['block3_out', 'soir_sortie', 'sortie_fin']),
                                 };
 
-                                // Calculate total worked hours exactly like TemplatePlanner
                                 const work1Mins = getMinutesBetween(rec.block1_in, rec.block1_out);
                                 const work2Mins = getMinutesBetween(rec.block2_in, rec.block2_out);
                                 const work3Mins = getMinutesBetween(rec.block3_in, rec.block3_out);
@@ -287,7 +281,6 @@ export default function DailyAttendanceSheet({
                                         <td className="p-3 font-medium">{emp.matricule}</td>
                                         <td className="p-3 font-semibold">{emp.name}</td>
 
-                                        {/* Presence Checkbox */}
                                         <td className="p-3 text-center">
                                             <input
                                                 type="checkbox"
@@ -297,7 +290,6 @@ export default function DailyAttendanceSheet({
                                             />
                                         </td>
 
-                                        {/* Declaration Status Dropdown */}
                                         <td className="p-3 text-center bg-purple-50/30">
                                             <select
                                                 value={rec.declaration_status || 'declared'}
@@ -309,7 +301,6 @@ export default function DailyAttendanceSheet({
                                             </select>
                                         </td>
 
-                                        {/* Block 1 In */}
                                         <td className="p-3 bg-blue-50/50">
                                             <input
                                                 type="time"
@@ -322,7 +313,6 @@ export default function DailyAttendanceSheet({
                                             />
                                         </td>
 
-                                        {/* Block 1 Out */}
                                         <td className="p-3 bg-blue-50/50">
                                             <input
                                                 type="time"
@@ -335,7 +325,6 @@ export default function DailyAttendanceSheet({
                                             />
                                         </td>
 
-                                        {/* Block 2 In */}
                                         <td className="p-3 bg-indigo-50/50">
                                             <input
                                                 type="time"
@@ -348,7 +337,6 @@ export default function DailyAttendanceSheet({
                                             />
                                         </td>
 
-                                        {/* Block 2 Out */}
                                         <td className="p-3 bg-indigo-50/50">
                                             <input
                                                 type="time"
@@ -361,7 +349,6 @@ export default function DailyAttendanceSheet({
                                             />
                                         </td>
 
-                                        {/* Block 3 In */}
                                         <td className="p-3 bg-amber-50/50">
                                             <input
                                                 type="time"
@@ -374,7 +361,6 @@ export default function DailyAttendanceSheet({
                                             />
                                         </td>
 
-                                        {/* Block 3 Out */}
                                         <td className="p-3 bg-amber-50/50">
                                             <input
                                                 type="time"
@@ -387,12 +373,10 @@ export default function DailyAttendanceSheet({
                                             />
                                         </td>
 
-                                        {/* Total Worked Hours Column */}
                                         <td className="p-3 bg-emerald-50/50 font-bold text-emerald-700">
                                             {totalWorkedFormatted}
                                         </td>
 
-                                        {/* Status Badge */}
                                         <td className="p-3 text-xs font-bold">
                                             {rec.is_present ? (
                                                 <span className="text-green-600">Present</span>

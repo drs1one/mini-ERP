@@ -1,8 +1,8 @@
 'use client';
 
 interface NavbarProps {
-    activeTab: 'attendance' | 'payroll' | 'monthly' | 'transport';
-    setActiveTab: (tab: 'attendance' | 'payroll' | 'monthly' | 'transport') => void;
+    activeTab: 'attendance' | 'payroll' | 'reports' | 'transport' | 'financials';
+    setActiveTab: (tab: 'attendance' | 'payroll' | 'reports' | 'transport' | 'financials') => void;
 }
 
 export default function Navbar({ activeTab, setActiveTab }: NavbarProps) {
@@ -16,7 +16,7 @@ export default function Navbar({ activeTab, setActiveTab }: NavbarProps) {
                         : 'bg-white text-gray-700 hover:bg-gray-100 border'
                 }`}
             >
-                Daily Attendance Sheet
+                📋 Daily Attendance Sheet
             </button>
             <button
                 onClick={() => setActiveTab('payroll')}
@@ -26,17 +26,17 @@ export default function Navbar({ activeTab, setActiveTab }: NavbarProps) {
                         : 'bg-white text-gray-700 hover:bg-gray-100 border'
                 }`}
             >
-                Cumulative Payroll Summary
+                💰 Cumulative Payroll Summary
             </button>
             <button
-                onClick={() => setActiveTab('monthly')}
+                onClick={() => setActiveTab('reports')}
                 className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-sm ${
-                    activeTab === 'monthly'
+                    activeTab === 'reports'
                         ? 'bg-indigo-600 text-white shadow-indigo-100'
                         : 'bg-white text-gray-700 hover:bg-gray-100 border'
                 }`}
             >
-                Monthly Ledger & Report
+                📊 Monthly Ledger & Report
             </button>
             <button
                 onClick={() => setActiveTab('transport')}
@@ -46,7 +46,17 @@ export default function Navbar({ activeTab, setActiveTab }: NavbarProps) {
                         : 'bg-white text-gray-700 hover:bg-gray-100 border'
                 }`}
             >
-                Transport & Logistics
+                🚌 Transport & Logistics
+            </button>
+            <button
+                onClick={() => setActiveTab('financials')}
+                className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-sm ${
+                    activeTab === 'financials'
+                        ? 'bg-indigo-600 text-white shadow-indigo-100'
+                        : 'bg-white text-gray-700 hover:bg-gray-100 border'
+                }`}
+            >
+                📈 Models & Expenses (P&L)
             </button>
         </div>
     );

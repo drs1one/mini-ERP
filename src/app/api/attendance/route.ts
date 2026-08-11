@@ -1,48 +1,45 @@
 import { NextResponse } from 'next/server';
-import { getCloudflareContext } from '@opennextjs/cloudflare';
 
+// ==========================================
+// DATABASE HELPERS (Self-contained)
+// ==========================================
 async function getDb() {
     try {
-        const { env } = await getCloudflareContext();
         // @ts-ignore
+        const { env } = await import('@opennext/cloudflare');
         if (env?.DB) return env.DB;
     } catch {}
 
-    try {
-        // @ts-ignore
-        const { env } = await import('@opennextjs/cloudflare').catch(() => ({}));
-        if (env?.DB) return env.DB;
-    } catch {}
-
-    // @ts-ignore
     if (typeof process !== 'undefined' && process.env?.DB) {
-        // @ts-ignore
-        return process.env.DB;
+        return process.env.DB as any;
     }
-    return null;
+
+    return (globalThis as any).DB as any;
 }
 
 async function ensureTable(db: any) {
+    if (!db?.prepare) return;
     await db.prepare(`
         CREATE TABLE IF NOT EXISTS time_sessions (
-                                                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                     employee_id INTEGER,
-                                                     date TEXT,
-                                                     block1_in TEXT,
-                                                     block1_out TEXT,
-                                                     block2_in TEXT,
-                                                     block2_out TEXT,
-                                                     block3_in TEXT,
-                                                     block3_out TEXT,
-                                                     total_hours REAL,
-                                                     is_present INTEGER,
-                                                     declaration_status TEXT DEFAULT 'declared',
-                                                     status TEXT,
-                                                     UNIQUE(employee_id, date)
-            )
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            block1_in TEXT,
+            block1_out TEXT,
+            block2_in TEXT,
+            block2_out TEXT,
+            block3_in TEXT,
+            block3_out TEXT,
+            total_hours REAL DEFAULT 0,
+            is_present INTEGER DEFAULT 0,
+            declaration_status TEXT DEFAULT 'declared',
+            status TEXT DEFAULT 'active',
+            UNIQUE(employee_id, date)
+        )
     `).run();
 }
 
+// Helper function to parse time string to minutes
 const parseTimeToMinutes = (timeStr: string) => {
     if (!timeStr) return 0;
     let clean = String(timeStr).trim();
@@ -68,62 +65,54 @@ const getMinutesBetween = (start: string, end: string) => {
     return totalMins > 0 ? totalMins : 0;
 };
 
-// GET: Fetch attendance records for a specific date
-export async function GET(request: Request) {
-    try {
-        const db = await getDb();
-        if (!db) {
-            return NextResponse.json({ success: false, error: 'Database binding not found' }, { status: 500 });
-        }
-        await ensureTable(db);
-
-        const url = new URL(request.url);
-        const date = url.searchParams.get('date');
-
-        if (!date) {
-            return NextResponse.json({ success: false, error: 'Missing date parameter' }, { status: 400 });
-        }
-
-        const { results } = await db.prepare(
-            "SELECT * FROM time_sessions WHERE date = ?"
-        ).bind(date).all();
-
-        return NextResponse.json({ success: true, records: results || [] });
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        return NextResponse.json({ success: false, error: message }, { status: 500 });
-    }
-}
-
-// POST: Save or update attendance records including declaration_status
+// POST: Save or update attendance records and recalculate monthly salaries
 export async function POST(request: Request) {
     try {
         const db = await getDb();
         if (!db) {
-            return NextResponse.json({ success: false, error: 'Database binding not found' }, { status: 500 });
+            return NextResponse.json(
+                { success: false, error: 'Database binding not found' },
+                { status: 500 }
+            );
         }
         await ensureTable(db);
 
-        const body = await request.json() as { attendanceDate?: string; date?: string; records: any[] };
+        const body = (await request.json().catch(() => ({}))) as {
+            attendanceDate?: string;
+            date?: string;
+            records?: Array<{
+                employee_id: number;
+                declaration_status?: string;
+                is_present?: boolean;
+                block1_in?: string;
+                block1_out?: string;
+                block2_in?: string;
+                block2_out?: string;
+                block3_in?: string;
+                block3_out?: string;
+            }>;
+        };
+
         const attendanceDate = body.attendanceDate || body.date;
         const records = body.records;
 
         if (!attendanceDate || !records || !Array.isArray(records)) {
-            return NextResponse.json({ success: false, error: 'Invalid payload data' }, { status: 400 });
+            return NextResponse.json(
+                { success: false, error: 'Invalid payload data: missing attendanceDate or records array' },
+                { status: 400 }
+            );
         }
 
         for (const r of records) {
             const employeeId = r.employee_id;
             const declarationStatus = r.declaration_status === 'not_declared' ? 'not_declared' : 'declared';
-
-            // CRITICAL FIX: Strictly respect is_present. If absent (0 or false), hours must be 0!
             const isPresent = r.is_present ? 1 : 0;
 
             let totalHours = 0;
             if (isPresent) {
-                const w1 = getMinutesBetween(r.block1_in, r.block1_out);
-                const w2 = getMinutesBetween(r.block2_in, r.block2_out);
-                const w3 = getMinutesBetween(r.block3_in, r.block3_out);
+                const w1 = getMinutesBetween(r.block1_in || '', r.block1_out || '');
+                const w2 = getMinutesBetween(r.block2_in || '', r.block2_out || '');
+                const w3 = getMinutesBetween(r.block3_in || '', r.block3_out || '');
                 totalHours = Number(((w1 + w2 + w3) / 60).toFixed(2));
             }
 
@@ -160,9 +149,38 @@ export async function POST(request: Request) {
             ).run();
         }
 
-        return NextResponse.json({ success: true, message: 'Attendance and declaration status saved successfully!' });
+        const yearMonth = attendanceDate.substring(0, 7);
+
+        await db.prepare(`
+            UPDATE employees 
+            SET 
+                gross_salary = (
+                    COALESCE(
+                        (SELECT SUM(t.total_hours) FROM time_sessions t WHERE t.employee_id = employees.id AND t.date LIKE ?), 
+                        0
+                    ) * COALESCE(hourly_rate, 0)
+                ) + COALESCE(transport_allowance, 0) + COALESCE(prime, 0),
+                
+                net_salary = (
+                    (
+                        COALESCE(
+                            (SELECT SUM(t.total_hours) FROM time_sessions t WHERE t.employee_id = employees.id AND t.date LIKE ?), 
+                            0
+                        ) * COALESCE(hourly_rate, 0)
+                    ) + COALESCE(transport_allowance, 0) + COALESCE(prime, 0)
+                ) - COALESCE(advance, 0) - COALESCE(credit, 0)
+        `).bind(`${yearMonth}%`, `${yearMonth}%`).run();
+
+        return NextResponse.json({
+            success: true,
+            message: 'Attendance and monthly salaries saved successfully!'
+        });
+
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        return NextResponse.json({ success: false, error: message }, { status: 500 });
+        const message = error instanceof Error ? error.message : 'Unknown server error';
+        return NextResponse.json(
+            { success: false, error: message },
+            { status: 500 }
+        );
     }
 }

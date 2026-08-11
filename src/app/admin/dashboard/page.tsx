@@ -7,6 +7,7 @@ import DailyAttendanceSheet from '@/components/DailyAttendanceSheet';
 import PayrollSummary from '@/components/PayrollSummary';
 import MonthlyAttendanceReport from '@/components/MonthlyAttendanceReport';
 import TransportManager from '@/components/TransportManager';
+import FinancialsManager from '@/components/FinancialSummary';
 import Navbar from '@/components/Navbar';
 
 interface Employee {
@@ -65,13 +66,12 @@ const getDayOfWeekFromDateStr = (dateStr: string) => {
 };
 
 export default function AdminDashboard() {
+    const [activeTab, setActiveTab] = useState<'attendance' | 'payroll' | 'reports' | 'transport' | 'financials'>('attendance');
     const [employees, setEmployees] = useState<Employee[]>([]);
     const [templateRules, setTemplateRules] = useState<TemplateRule[]>([]);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<string>('');
     const [uploadingJson, setUploadingJson] = useState<boolean>(false);
-
-    const [activeTab, setActiveTab] = useState<'attendance' | 'payroll' | 'monthly' | 'transport'>('attendance');
 
     const todayStr = getMoroccanToday();
     const [attendanceDate, setAttendanceDate] = useState<string>(todayStr);
@@ -150,7 +150,6 @@ export default function AdminDashboard() {
                         declaration_status: saved.declaration_status || 'declared',
                     };
                 } else if (rule) {
-                    const isWorking = Boolean(rule.is_working_day);
                     initialRecords[emp.id] = {
                         employee_id: emp.id,
                         block1_in: rule.block1_in || '',
@@ -159,7 +158,7 @@ export default function AdminDashboard() {
                         block2_out: rule.block2_out || '',
                         block3_in: rule.block3_in || '',
                         block3_out: rule.block3_out || '',
-                        is_present: isWorking,
+                        is_present: false,
                         declaration_status: 'declared',
                     };
                 } else {
@@ -202,7 +201,7 @@ export default function AdminDashboard() {
                 block2_out: '',
                 block3_in: '',
                 block3_out: '',
-                is_present: true,
+                is_present: false,
                 declaration_status: 'declared'
             };
 
@@ -214,22 +213,6 @@ export default function AdminDashboard() {
                 }
             };
         });
-    };
-
-    const handleDeleteEmployee = async (id: number) => {
-        if (!confirm('Are you sure you want to delete this employee?')) return;
-        try {
-            const res = await fetch(`/api/employees?id=${id}`, { method: 'DELETE' });
-            const data = await res.json() as { success?: boolean; error?: string };
-            if (data.success) {
-                void fetchData();
-            } else {
-                alert(data.error || 'Failed to delete employee');
-            }
-        } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : 'Unknown error';
-            alert(message);
-        }
     };
 
     const handleSaveDailyAttendance = async () => {
@@ -294,13 +277,13 @@ export default function AdminDashboard() {
     return (
         <div className="min-h-screen bg-gray-100 p-8">
             <div className="max-w-7xl mx-auto space-y-8">
+                {/* Header with Navigation Bar */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-2xl shadow-md">
                     <div>
                         <h1 className="text-3xl font-bold text-gray-800">Tixtile Admin Dashboard</h1>
-                        <p className="text-sm text-gray-500 mt-1">Modular Attendance & Payroll Control</p>
+                        <p className="text-sm text-gray-500 mt-1">Manage employee attendance, payroll, and schedules</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                        {/* JSON Upload Button */}
                         <label className={`cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold shadow transition-colors flex items-center gap-2 ${uploadingJson ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <span>📁 {uploadingJson ? 'Uploading...' : 'Upload JSON'}</span>
                             <input
@@ -333,12 +316,14 @@ export default function AdminDashboard() {
                     </div>
                 </div>
 
-                {error && <div className="p-4 bg-red-100 text-red-700 rounded-lg">{error}</div>}
-
+                {/* Navbar Component */}
                 <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
 
+                {error && <div className="p-4 bg-red-100 text-red-700 rounded-lg">{error}</div>}
+
+                {/* Active Tab Content */}
                 <div className="transition-all duration-300">
-                    {activeTab === 'attendance' ? (
+                    {activeTab === 'attendance' && (
                         <DailyAttendanceSheet
                             employees={employees}
                             dailyRecords={dailyRecords}
@@ -349,19 +334,21 @@ export default function AdminDashboard() {
                             onTimeChange={handleTimeChange}
                             onSave={() => void handleSaveDailyAttendance()}
                         />
-                    ) : activeTab === 'payroll' ? (
+                    )}
+                    {activeTab === 'payroll' && (
                         <PayrollSummary
                             employees={employees}
                             dailyRecords={dailyRecords}
                             loading={loading}
-                            onDelete={(id) => void handleDeleteEmployee(id)}
                             onRefresh={() => void fetchData()}
+                            onDelete={() => void fetchData()}
                         />
-                    ) : activeTab === 'monthly' ? (
-                        <MonthlyAttendanceReport employees={employees} />
-                    ) : (
-                        <TransportManager />
                     )}
+                    {activeTab === 'reports' && (
+                        <MonthlyAttendanceReport employees={employees} />
+                    )}
+                    {activeTab === 'transport' && <TransportManager />}
+                    {activeTab === 'financials' && <FinancialsManager />}
                 </div>
 
                 {showEmployeeModal && (
