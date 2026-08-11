@@ -24,7 +24,7 @@
 		{
 			"binding": "DB",
 			"database_name": "tixtile",
-			"database_id": "text"
+			"database_id": ""
 		}
 	],
 	"observability": {

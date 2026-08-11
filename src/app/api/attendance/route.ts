@@ -1,81 +1,168 @@
 import { NextResponse } from 'next/server';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 
-interface AttendanceRequestBody {
-    employee_id: number;
-    date: string;
-    clock_in: string;
-    clock_out: string;
-    day_of_week?: string;
+async function getDb() {
+    try {
+        const { env } = await getCloudflareContext();
+        // @ts-ignore
+        if (env?.DB) return env.DB;
+    } catch {}
+
+    try {
+        // @ts-ignore
+        const { env } = await import('@opennextjs/cloudflare').catch(() => ({}));
+        if (env?.DB) return env.DB;
+    } catch {}
+
+    // @ts-ignore
+    if (typeof process !== 'undefined' && process.env?.DB) {
+        // @ts-ignore
+        return process.env.DB;
+    }
+    return null;
 }
 
-function calculateWorkedHours(clockIn: string, clockOut: string, dayOfWeek: string): number {
-    const [inHours, inMinutes] = clockIn.split(':').map(Number);
-    const [outHours, outMinutes] = clockOut.split(':').map(Number);
-
-    const totalMinutesWorked = (outHours * 60 + outMinutes) - (inHours * 60 + inMinutes);
-    // Friday automatically gets 1h 30m (90 mins) break, other days get 30 mins break
-    const pauseMinutes = dayOfWeek.toLowerCase() === 'friday' ? 90 : 30;
-
-    const netMinutes = totalMinutesWorked - pauseMinutes;
-    return Math.max(0, parseFloat((netMinutes / 60).toFixed(2)));
+async function ensureTable(db: any) {
+    await db.prepare(`
+        CREATE TABLE IF NOT EXISTS time_sessions (
+                                                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                     employee_id INTEGER,
+                                                     date TEXT,
+                                                     block1_in TEXT,
+                                                     block1_out TEXT,
+                                                     block2_in TEXT,
+                                                     block2_out TEXT,
+                                                     block3_in TEXT,
+                                                     block3_out TEXT,
+                                                     total_hours REAL,
+                                                     is_present INTEGER,
+                                                     declaration_status TEXT DEFAULT 'declared',
+                                                     status TEXT,
+                                                     UNIQUE(employee_id, date)
+            )
+    `).run();
 }
 
+const parseTimeToMinutes = (timeStr: string) => {
+    if (!timeStr) return 0;
+    let clean = String(timeStr).trim();
+    let parts = clean.split(' ');
+    let time = parts[0];
+    let modifier = parts[1] ? parts[1].toUpperCase() : '';
+    if (!time) return 0;
+
+    let [hours, minutes] = time.split(':').map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return 0;
+
+    if (modifier) {
+        if (modifier === 'PM' && hours < 12) hours += 12;
+        if (modifier === 'AM' && hours === 12) hours = 0;
+    }
+    return hours * 60 + minutes;
+};
+
+const getMinutesBetween = (start: string, end: string) => {
+    const sMins = parseTimeToMinutes(start);
+    const eMins = parseTimeToMinutes(end);
+    const totalMins = eMins - sMins;
+    return totalMins > 0 ? totalMins : 0;
+};
+
+// GET: Fetch attendance records for a specific date
+export async function GET(request: Request) {
+    try {
+        const db = await getDb();
+        if (!db) {
+            return NextResponse.json({ success: false, error: 'Database binding not found' }, { status: 500 });
+        }
+        await ensureTable(db);
+
+        const url = new URL(request.url);
+        const date = url.searchParams.get('date');
+
+        if (!date) {
+            return NextResponse.json({ success: false, error: 'Missing date parameter' }, { status: 400 });
+        }
+
+        const { results } = await db.prepare(
+            "SELECT * FROM time_sessions WHERE date = ?"
+        ).bind(date).all();
+
+        return NextResponse.json({ success: true, records: results || [] });
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return NextResponse.json({ success: false, error: message }, { status: 500 });
+    }
+}
+
+// POST: Save or update attendance records including declaration_status
 export async function POST(request: Request) {
     try {
-        const body = (await request.json()) as AttendanceRequestBody;
-        const { employee_id, date, clock_in, clock_out, day_of_week = 'Monday' } = body;
-
-        const cfContext = await getCloudflareContext();
-        //@ts-ignore
-        const db = cfContext?.env?.DB || process.env.DB;
-
+        const db = await getDb();
         if (!db) {
-            return NextResponse.json({ success: false, error: "Database binding missing" }, { status: 500 });
+            return NextResponse.json({ success: false, error: 'Database binding not found' }, { status: 500 });
+        }
+        await ensureTable(db);
+
+        const body = await request.json() as { attendanceDate?: string; date?: string; records: any[] };
+        const attendanceDate = body.attendanceDate || body.date;
+        const records = body.records;
+
+        if (!attendanceDate || !records || !Array.isArray(records)) {
+            return NextResponse.json({ success: false, error: 'Invalid payload data' }, { status: 400 });
         }
 
-        // 1. Calculate exact worked hours based on individual start & end times
-        const total_hours_worked = calculateWorkedHours(clock_in, clock_out, day_of_week);
+        for (const r of records) {
+            const employeeId = r.employee_id;
+            const declarationStatus = r.declaration_status === 'not_declared' ? 'not_declared' : 'declared';
 
-        // 2. Insert or log the shift session
-        await db.prepare(
-            `INSERT INTO time_sessions (employee_id, date, clock_in, clock_out, total_hours_worked, status)
-             VALUES (?, ?, ?, ?, ?, 'completed')`
-        ).bind(
-            employee_id,
-            date || new Date().toISOString().split('T')[0],
-            clock_in,
-            clock_out,
-            total_hours_worked
-        ).run();
+            // CRITICAL FIX: Strictly respect is_present. If absent (0 or false), hours must be 0!
+            const isPresent = r.is_present ? 1 : 0;
 
-        // 3. Sum all hours for this specific employee across their sessions
-        const sessionsResult: any = await db.prepare(
-            "SELECT SUM(total_hours_worked) as total_worked FROM time_sessions WHERE employee_id = ?"
-        ).bind(employee_id).first();
+            let totalHours = 0;
+            if (isPresent) {
+                const w1 = getMinutesBetween(r.block1_in, r.block1_out);
+                const w2 = getMinutesBetween(r.block2_in, r.block2_out);
+                const w3 = getMinutesBetween(r.block3_in, r.block3_out);
+                totalHours = Number(((w1 + w2 + w3) / 60).toFixed(2));
+            }
 
-        const accumulatedHours = sessionsResult?.total_worked || 0;
+            const status = isPresent ? 'active' : 'absent';
 
-        // 4. Fetch employee financial details and recalculate Gross & Net Salary automatically
-        const emp: any = await db.prepare("SELECT * FROM employees WHERE id = ?").bind(employee_id).first();
-
-        if (emp) {
-            const earnedFromHours = (emp.hourly_rate || 0) * accumulatedHours;
-            const grossSalary = earnedFromHours + (emp.transport_allowance || 0) + (emp.prime || 0);
-            const newTotalNet = grossSalary - (emp.advance || 0) - (emp.credit || 0);
-
-            await db.prepare(
-                "UPDATE employees SET weekly_hours = ?, total_net = ? WHERE id = ?"
-            ).bind(accumulatedHours, newTotalNet, employee_id).run();
+            await db.prepare(`
+                INSERT INTO time_sessions
+                (employee_id, date, block1_in, block1_out, block2_in, block2_out, block3_in, block3_out, total_hours, is_present, declaration_status, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(employee_id, date) DO UPDATE SET
+                    block1_in = excluded.block1_in,
+                                                          block1_out = excluded.block1_out,
+                                                          block2_in = excluded.block2_in,
+                                                          block2_out = excluded.block2_out,
+                                                          block3_in = excluded.block3_in,
+                                                          block3_out = excluded.block3_out,
+                                                          total_hours = excluded.total_hours,
+                                                          is_present = excluded.is_present,
+                                                          declaration_status = excluded.declaration_status,
+                                                          status = excluded.status
+            `).bind(
+                employeeId,
+                attendanceDate,
+                r.block1_in || '',
+                r.block1_out || '',
+                r.block2_in || '',
+                r.block2_out || '',
+                r.block3_in || '',
+                r.block3_out || '',
+                totalHours,
+                isPresent,
+                declarationStatus,
+                status
+            ).run();
         }
 
-        return NextResponse.json({
-            success: true,
-            accumulatedHours,
-            message: "Individual employee hours and salary updated successfully!"
-        });
+        return NextResponse.json({ success: true, message: 'Attendance and declaration status saved successfully!' });
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        return NextResponse.json({ success: false, error: message }, { status: 400 });
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return NextResponse.json({ success: false, error: message }, { status: 500 });
     }
 }

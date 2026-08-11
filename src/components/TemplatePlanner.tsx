@@ -21,21 +21,25 @@ interface TemplateRule {
     isWorkingDay?: number;
 }
 
-export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => void }) {
+interface Props {
+    onRuleSaved?: () => void;
+    onClose?: () => void;
+}
+
+export default function TemplatePlanner({ onRuleSaved, onClose }: Props) {
     const allDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     const [editDay, setEditDay] = useState<string>('Monday');
     const [rules, setRules] = useState<TemplateRule[]>([]);
 
-    // Fetch saved template rules from database on load
     useEffect(() => {
         async function fetchTemplates() {
             try {
                 const res = await fetch('/api/schedule/template');
-                const data = await res.json();
-                if (data.rules && Array.isArray(data.rules)) {
-                    setRules(data.rules);
-                } else if (Array.isArray(data)) {
-                    setRules(data);
+                const data = (await res.json()) as any;
+
+                const loaded = data.template || data.rules || data.templates || data.data || data.schedule || (Array.isArray(data) ? data : []);
+                if (Array.isArray(loaded)) {
+                    setRules(loaded);
                 }
             } catch (err) {
                 console.error('Failed to load templates', err);
@@ -44,7 +48,6 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
         fetchTemplates();
     }, []);
 
-    // 6 time blocks states
     const [block1In, setBlock1In] = useState<string>('');
     const [block1Out, setBlock1Out] = useState<string>('');
     const [block2In, setBlock2In] = useState<string>('');
@@ -53,7 +56,6 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
     const [block3Out, setBlock3Out] = useState<string>('');
     const [editIsWorking, setEditIsWorking] = useState<boolean>(true);
 
-    // Load saved data for the selected day whenever rules or editDay changes
     useEffect(() => {
         const existing = rules.find(r => {
             const d = r.day_of_week || r.dayOfWeek || r.day;
@@ -71,35 +73,50 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
             const workingVal = existing.is_working_day !== undefined ? existing.is_working_day : existing.isWorkingDay;
             setEditIsWorking(workingVal !== undefined ? Boolean(workingVal) : (editDay !== 'Sunday'));
         } else {
-            // Default pre-filled values if no rule is saved yet for this day
-            setBlock1In('07:30 AM');
-            setBlock1Out('10:30 AM');
-            setBlock2In('10:45 AM');
-            setBlock2Out('01:30 PM');
-            setBlock3In('02:30 PM');
-            setBlock3Out('04:30 PM');
+            setBlock1In('');
+            setBlock1Out('');
+            setBlock2In('');
+            setBlock2Out('');
+            setBlock3In('');
+            setBlock3Out('');
             setEditIsWorking(editDay !== 'Sunday');
         }
     }, [editDay, rules]);
 
-    const parseTimeToMinutes = (timeStr: string) => {
+    // Smart time parser that correctly handles afternoon/evening PM hours
+    const parseTimeToMinutes = (timeStr: string, isAfternoonOrEvening = false) => {
         if (!timeStr) return 0;
-        let [time, modifier] = timeStr.trim().split(' ');
+        let clean = timeStr.trim().toLowerCase();
+        let isPM = clean.includes('pm');
+        let isAM = clean.includes('am');
+        clean = clean.replace('am', '').replace('pm', '').trim();
+        clean = clean.replace('h', ':').replace('.', ':');
+        let [time] = clean.split(' ');
         if (!time) return 0;
-        let [hours, minutes] = time.split(':').map(Number);
-        if (isNaN(hours) || isNaN(minutes)) return 0;
+        let parts = time.split(':');
+        let hours = Number(parts[0]) || 0;
+        let minutes = Number(parts[1]) || 0;
 
-        if (modifier) {
-            modifier = modifier.toUpperCase();
-            if (modifier === 'PM' && hours < 12) hours += 12;
-            if (modifier === 'AM' && hours === 12) hours = 0;
+        if (isPM) {
+            if (hours < 12) hours += 12;
+        } else if (isAM) {
+            if (hours === 12) hours = 0;
+            // If mistakenly marked AM on an afternoon hour (1-7), correct it to PM
+            else if (isAfternoonOrEvening && hours >= 1 && hours <= 7) {
+                hours += 12;
+            }
+        } else {
+            // Default hours 1-7 in afternoon/evening slots to PM (e.g. 2:30 -> 14:30)
+            if (isAfternoonOrEvening && hours >= 1 && hours <= 7) {
+                hours += 12;
+            }
         }
         return hours * 60 + minutes;
     };
 
-    const getMinutesBetween = (start: string, end: string) => {
-        const sMins = parseTimeToMinutes(start);
-        const eMins = parseTimeToMinutes(end);
+    const getMinutesBetween = (start: string, end: string, isAfternoon = false) => {
+        const sMins = parseTimeToMinutes(start, isAfternoon);
+        const eMins = parseTimeToMinutes(end, isAfternoon);
         const totalMins = eMins - sMins;
         return totalMins > 0 ? totalMins : 0;
     };
@@ -110,13 +127,13 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
         return `${Number(hours.toFixed(2))}h`;
     };
 
-    const pause1Mins = getMinutesBetween(block1Out, block2In);
-    const pause2Mins = getMinutesBetween(block2Out, block3In);
+    const pause1Mins = getMinutesBetween(block1Out, block2In, false);
+    const pause2Mins = getMinutesBetween(block2Out, block3In, true);
     const totalPauseMins = pause1Mins + pause2Mins;
 
-    const work1Mins = getMinutesBetween(block1In, block1Out);
-    const work2Mins = getMinutesBetween(block2In, block2Out);
-    const work3Mins = getMinutesBetween(block3In, block3Out);
+    const work1Mins = getMinutesBetween(block1In, block1Out, false);
+    const work2Mins = getMinutesBetween(block2In, block2Out, true);
+    const work3Mins = getMinutesBetween(block3In, block3Out, true);
     const totalWorkMins = work1Mins + work2Mins + work3Mins;
 
     const handleSubmit = async (e: FormEvent) => {
@@ -138,7 +155,7 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            const data = await res.json() as { success?: boolean; message?: string; error?: string };
+            const data = (await res.json()) as { success?: boolean; message?: string; error?: string };
 
             if (data.success) {
                 setRules(prev => {
@@ -150,6 +167,7 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
                 });
                 alert(data.message || `Template for ${editDay} saved successfully!`);
                 if (onRuleSaved) onRuleSaved();
+                if (onClose) onClose();
             } else {
                 alert(data.error || 'Failed to save');
             }
@@ -159,8 +177,13 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
     };
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-md">
-            <h2 className="text-xl font-bold mb-4 text-gray-700">Modèle de Planning Hebdomadaire (6 Blocs)</h2>
+        <div className="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-xl relative max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4 border-b pb-3">
+                <h2 className="text-xl font-bold text-gray-800">Modèle de Planning Hebdomadaire (6 Blocs)</h2>
+                {onClose && (
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 font-bold text-lg">✕</button>
+                )}
+            </div>
 
             {/* Day Selector Buttons */}
             <div className="mb-4 grid grid-cols-7 gap-1 text-center bg-gray-50 p-2 rounded-lg border text-xs">
@@ -252,9 +275,16 @@ export default function TemplatePlanner({ onRuleSaved }: { onRuleSaved?: () => v
                     </div>
                 </div>
 
-                <button type="submit" className="w-full bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 font-bold shadow-md">
-                    Enregistrer le planning pour {editDay}
-                </button>
+                <div className="flex space-x-3 pt-2">
+                    {onClose && (
+                        <button type="button" onClick={onClose} className="w-1/2 bg-gray-200 text-gray-800 py-2.5 rounded-xl font-bold hover:bg-gray-300 transition-colors">
+                            Cancel
+                        </button>
+                    )}
+                    <button type="submit" className={`${onClose ? 'w-1/2' : 'w-full'} bg-indigo-600 text-white py-2.5 rounded-xl hover:bg-indigo-700 font-bold shadow-md`}>
+                        Enregistrer pour {editDay}
+                    </button>
+                </div>
             </form>
         </div>
     );

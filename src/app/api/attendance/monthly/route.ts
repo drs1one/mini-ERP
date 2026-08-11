@@ -33,17 +33,19 @@ export async function GET(request: Request) {
             return NextResponse.json({ success: false, error: 'Database binding (DB) not found' }, { status: 500 });
         }
 
+        // Dynamically calculate the exact last day of the selected month
         const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
         const startDate = `${year}-${month}-01`;
         const endDate = `${year}-${month}-${String(lastDay).padStart(2, '0')}`;
 
+        // Query time_sessions records joined with employees table
         const { results } = await db.prepare(`
             SELECT
                 ts.*,
                 e.name as employee_name,
                 e.matricule as employee_matricule
             FROM time_sessions ts
-            LEFT JOIN employees e ON ts.employee_id = e.id
+                     LEFT JOIN employees e ON ts.employee_id = e.id
             WHERE ts.date >= ? AND ts.date <= ?
             ORDER BY ts.date ASC, e.matricule ASC
         `).bind(startDate, endDate).all();
